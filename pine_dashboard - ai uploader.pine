@@ -1,0 +1,208 @@
+// ============================================================
+// TRADE JOURNAL — AI SCREENSHOT DASHBOARD
+// Version: 1.0 | Compatible: Pine Script v6
+// For use with Trade Journal AI Import Feature
+//
+// HOW TO USE:
+// 1. Paste into TradingView Pine Editor → Add to chart
+// 2. Configure settings to match your system
+// 3. Set Direction, Type, Mode, Screenshot Type before each shot
+// 4. ENTRY SCREENSHOT: annotate E, STP, TGT, ETIME + manual rules
+// 5. EXIT SCREENSHOT: annotate X, MFE, MAE, XTIME
+// 6. Upload both to Claude AI with the prompt from AI Import tab
+// ============================================================
+
+//@version=6
+indicator("Trade Journal Dashboard", overlay=true)
+
+// ============================================================
+// SETTINGS
+// ============================================================
+emaFast   = input.int(9,  "EMA Fast Length",     group="EMA Cloud")
+emaSlow   = input.int(21, "EMA Slow Length",     group="EMA Cloud")
+ema10Len  = input.int(10, "10 EMA Length",       group="EMA Cloud")
+macdFast  = input.int(12, "MACD Fast",           group="MACD")
+macdSlow  = input.int(26, "MACD Slow",           group="MACD")
+macdSig   = input.int(9,  "MACD Signal",         group="MACD")
+rsiLen    = input.int(14, "RSI Length",          group="RSI")
+rsiOB     = input.int(70, "RSI Overbought",      group="RSI")
+rsiOS     = input.int(30, "RSI Oversold",        group="RSI")
+adxLen    = input.int(14, "ADX Length",          group="ADX")
+adxSmooth = input.int(14, "ADX Smoothing",       group="ADX")
+adxThr    = input.int(25, "ADX Trend Threshold", group="ADX")
+volLen    = input.int(20, "Volume MA Length",    group="Volume")
+
+panelPos  = input.string("Top Right", "Panel Position", options=["Top Right","Top Left","Bottom Right","Bottom Left"], group="Display")
+showPanel = input.bool(true, "Show Dashboard Panel", group="Display")
+
+tradeMode = input.string("Live",     "Trade Mode",      options=["Live","Backtest"],         group="Trade Info")
+tradeDir  = input.string("Long",     "Direction",       options=["Long","Short"],            group="Trade Info")
+tradeType = input.string("Reversal", "Trade Type",      options=["Reversal","Continuation"], group="Trade Info")
+ssType    = input.string("Entry",    "Screenshot Type", options=["Entry","Exit"],            group="Trade Info")
+
+// ============================================================
+// CALCULATIONS
+// ============================================================
+emaF  = ta.ema(close, emaFast)
+emaS  = ta.ema(close, emaSlow)
+ema10 = ta.ema(close, ema10Len)
+
+cloudBull  = emaF > emaS
+cloudWidth = math.round(math.abs(emaF - emaS) / emaS * 10000) / 100
+cloudDir   = cloudBull ? "Bullish" : "Bearish"
+
+[macdLine, sigLine, _h] = ta.macd(close, macdFast, macdSlow, macdSig)
+macdAbove    = macdLine > sigLine
+macdXBull    = ta.crossover(macdLine, sigLine)
+macdXBear    = ta.crossunder(macdLine, sigLine)
+recentCross  = macdXBull[0] or macdXBull[1] or macdXBull[2] or macdXBear[0] or macdXBear[1] or macdXBear[2]
+macdStateStr = macdAbove ? "Bull" : "Bear"
+macdCrossStr = recentCross ? " CROSS" : ""
+
+rsiVal   = ta.rsi(close, rsiLen)
+rsiExt   = rsiVal >= rsiOB or rsiVal <= rsiOS
+rsiState = rsiVal >= rsiOB ? "OB" : rsiVal <= rsiOS ? "OS" : "Mid"
+
+[_dp, _dm, adxVal] = ta.dmi(adxLen, adxSmooth)
+adxState = adxVal >= 40 ? "Strong" : adxVal >= adxThr ? "Trend" : adxVal >= 20 ? "Weak" : "Flat"
+
+volMA    = ta.sma(volume, volLen)
+volRatio = volume / volMA
+volState = volRatio >= 1.5 ? "Above" : volRatio >= 0.8 ? "Avg" : "Below"
+
+sessionEst = adxVal >= adxThr and cloudWidth >= 0.25 ? "Trending" : adxVal <= 20 and cloudWidth <= 0.15 ? "Ranging" : adxVal <= 15 ? "Choppy" : "Mixed"
+
+cloud15m    = request.security(syminfo.tickerid, "15", ta.ema(close, emaFast) > ta.ema(close, emaSlow))
+cloud15mStr = cloud15m ? "Bull" : "Bear"
+
+priceVs10  = close > ema10 ? "Above" : "Below"
+firstC10   = (close > ema10 and close[1] <= ema10[1]) or (close < ema10 and close[1] >= ema10[1])
+
+rCA = (cloudBull and tradeDir == "Long") or (not cloudBull and tradeDir == "Short")
+rMX = recentCross and ((macdXBull and tradeDir == "Long") or (macdXBear and tradeDir == "Short"))
+rRE = rsiExt
+rC15 = (cloud15m and tradeDir == "Long") or (not cloud15m and tradeDir == "Short")
+rFC = firstC10
+
+yn(b) => b ? "Y" : "N"
+f2(v) => str.tostring(math.round(v * 100) / 100)
+f1(v) => str.tostring(math.round(v * 10) / 10)
+
+// ============================================================
+// PANEL
+// ============================================================
+var table panel = na
+
+if showPanel and barstate.islast
+    tPos = panelPos == "Top Right" ? position.top_right : panelPos == "Top Left" ? position.top_left : panelPos == "Bottom Right" ? position.bottom_right : position.bottom_left
+    panel := table.new(tPos, 2, 28, border_width=1, border_color=color.new(color.gray, 70), bgcolor=color.new(color.black, 15), frame_width=2, frame_color=color.new(color.gray, 50))
+
+    cHead = color.new(#1a2435, 0)
+    cRow  = color.new(#0a0e17, 10)
+    cAlt  = color.new(#0f1520, 10)
+    cG    = color.new(color.green, 0)
+    cR    = color.new(color.red, 0)
+    cGold = color.new(#f0b429, 0)
+    cBlue = color.new(#4fc3f7, 0)
+    cGray = color.new(color.gray, 30)
+    cWht  = color.new(color.white, 0)
+    lA = text.align_left
+    rA = text.align_right
+    fS = size.small
+    fT = size.tiny
+
+    ssCol = ssType == "Entry" ? cG : cBlue
+    table.cell(panel, 0, 0, " TJ DASHBOARD — " + ssType, text_color=ssCol,  bgcolor=cHead, text_halign=lA, text_size=size.normal)
+    table.cell(panel, 1, 0, syminfo.ticker + " " + timeframe.period + " ",   text_color=cWht, bgcolor=cHead, text_halign=rA, text_size=size.normal)
+
+    table.cell(panel, 0, 1, " TRADE INFO",  text_color=cGold, bgcolor=cHead, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 1, "",             text_color=cGold, bgcolor=cHead, text_halign=rA, text_size=fS)
+
+    table.cell(panel, 0, 2, " Ticker",      text_color=cGray, bgcolor=cRow, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 2, syminfo.ticker + " ", text_color=cWht, bgcolor=cRow, text_halign=rA, text_size=fS)
+
+    table.cell(panel, 0, 3, " Timeframe",   text_color=cGray, bgcolor=cRow, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 3, timeframe.period + " ", text_color=cWht, bgcolor=cRow, text_halign=rA, text_size=fS)
+
+    table.cell(panel, 0, 4, " Date",        text_color=cGray, bgcolor=cRow, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 4, str.format_time(timenow, "yyyy-MM-dd", syminfo.timezone) + " ", text_color=cWht, bgcolor=cRow, text_halign=rA, text_size=fS)
+
+    table.cell(panel, 0, 5, " Time",        text_color=cGray, bgcolor=cRow, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 5, str.format_time(timenow, "HH:mm", syminfo.timezone) + " ", text_color=cWht, bgcolor=cRow, text_halign=rA, text_size=fS)
+
+    table.cell(panel, 0, 6, " Mode",        text_color=cGray, bgcolor=cRow, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 6, tradeMode + " ", text_color=tradeMode == "Live" ? cG : cBlue, bgcolor=cRow, text_halign=rA, text_size=fS)
+
+    table.cell(panel, 0, 7, " Direction",   text_color=cGray, bgcolor=cRow, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 7, tradeDir + " ", text_color=tradeDir == "Long" ? cG : cR, bgcolor=cRow, text_halign=rA, text_size=fS)
+
+    table.cell(panel, 0, 8, " Type",        text_color=cGray, bgcolor=cRow, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 8, tradeType + " ", text_color=cGold, bgcolor=cRow, text_halign=rA, text_size=fS)
+
+    table.cell(panel, 0, 9, " PRICE",       text_color=cGold, bgcolor=cHead, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 9, "",             text_color=cGold, bgcolor=cHead, text_halign=rA, text_size=fS)
+
+    table.cell(panel, 0, 10, " Price",      text_color=cGray, bgcolor=cRow, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 10, f2(close) + " ", text_color=cWht, bgcolor=cRow, text_halign=rA, text_size=fS)
+
+    table.cell(panel, 0, 11, " 10 EMA",     text_color=cGray, bgcolor=cRow, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 11, f2(ema10) + " ", text_color=cGold, bgcolor=cRow, text_halign=rA, text_size=fS)
+
+    table.cell(panel, 0, 12, " vs 10 EMA",  text_color=cGray, bgcolor=cRow, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 12, priceVs10 + " ", text_color=close > ema10 ? cG : cR, bgcolor=cRow, text_halign=rA, text_size=fS)
+
+    table.cell(panel, 0, 13, " INDICATORS", text_color=cGold, bgcolor=cHead, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 13, "",            text_color=cGold, bgcolor=cHead, text_halign=rA, text_size=fS)
+
+    adxC = adxVal >= adxThr ? cG : adxVal >= 20 ? cGold : cR
+    table.cell(panel, 0, 14, " ADX",        text_color=cGray, bgcolor=cRow, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 14, f1(adxVal) + " " + adxState + " ", text_color=adxC, bgcolor=cRow, text_halign=rA, text_size=fS)
+
+    rsiC = rsiVal >= rsiOB ? cR : rsiVal <= rsiOS ? cG : cGold
+    table.cell(panel, 0, 15, " RSI",        text_color=cGray, bgcolor=cRow, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 15, f1(rsiVal) + " " + rsiState + " ", text_color=rsiC, bgcolor=cRow, text_halign=rA, text_size=fS)
+
+    table.cell(panel, 0, 16, " Cloud",      text_color=cGray, bgcolor=cRow, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 16, cloudDir + " " + str.tostring(cloudWidth) + "% ", text_color=cloudBull ? cG : cR, bgcolor=cRow, text_halign=rA, text_size=fS)
+
+    table.cell(panel, 0, 17, " MACD",       text_color=cGray, bgcolor=cRow, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 17, macdStateStr + macdCrossStr + " ", text_color=macdAbove ? cG : cR, bgcolor=cRow, text_halign=rA, text_size=fS)
+
+    volC = volRatio >= 1.5 ? cG : volRatio >= 0.8 ? cGold : cR
+    table.cell(panel, 0, 18, " Volume",     text_color=cGray, bgcolor=cRow, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 18, volState + " " + f2(volRatio) + "x ", text_color=volC, bgcolor=cRow, text_halign=rA, text_size=fS)
+
+    table.cell(panel, 0, 19, " 15m Cloud",  text_color=cGray, bgcolor=cRow, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 19, cloud15mStr + " ", text_color=cloud15m ? cG : cR, bgcolor=cRow, text_halign=rA, text_size=fS)
+
+    table.cell(panel, 0, 20, " Session Est",text_color=cGray, bgcolor=cRow, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 20, sessionEst + " ", text_color=cGold, bgcolor=cRow, text_halign=rA, text_size=fS)
+
+    table.cell(panel, 0, 21, " AUTO RULES", text_color=cGold, bgcolor=cHead, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 21, "",            text_color=cGold, bgcolor=cHead, text_halign=rA, text_size=fS)
+
+    table.cell(panel, 0, 22, " Cloud Align",     text_color=cGray, bgcolor=cRow, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 22, yn(rCA) + " ",      text_color=rCA  ? cG : cR, bgcolor=cRow, text_halign=rA, text_size=fS)
+
+    table.cell(panel, 0, 23, " MACD Cross",      text_color=cGray, bgcolor=cRow, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 23, yn(rMX) + " ",      text_color=rMX  ? cG : cR, bgcolor=cRow, text_halign=rA, text_size=fS)
+
+    table.cell(panel, 0, 24, " RSI Extreme",     text_color=cGray, bgcolor=cRow, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 24, yn(rRE) + " ",      text_color=rRE  ? cG : cR, bgcolor=cRow, text_halign=rA, text_size=fS)
+
+    table.cell(panel, 0, 25, " 15m Cloud Align", text_color=cGray, bgcolor=cRow, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 25, yn(rC15) + " ",     text_color=rC15 ? cG : cR, bgcolor=cRow, text_halign=rA, text_size=fS)
+
+    table.cell(panel, 0, 26, " 1st Candle 10E",  text_color=cGray, bgcolor=cRow, text_halign=lA, text_size=fS)
+    table.cell(panel, 1, 26, yn(rFC) + " ",      text_color=rFC  ? cG : cR, bgcolor=cRow, text_halign=rA, text_size=fS)
+
+    table.cell(panel, 0, 27, " MANUAL: UHL · LHHL · CB · CR · 2C", text_color=cGold, bgcolor=cAlt, text_halign=lA, text_size=fT)
+    table.cell(panel, 1, 27, "annotate chart ", text_color=cGray, bgcolor=cAlt, text_halign=rA, text_size=fT)
+
+// ============================================================
+// PLOTS
+// ============================================================
+emaFp = plot(emaF,  "EMA Fast", color=color.new(color.aqua,   40), linewidth=1)
+emaSp = plot(emaS,  "EMA Slow", color=color.new(color.orange, 40), linewidth=1)
+plot(ema10, "10 EMA",           color=color.new(color.yellow, 50), linewidth=1)
+fill(emaFp, emaSp, color=cloudBull ? color.new(color.green, 85) : color.new(color.red, 85), title="Cloud Fill")
